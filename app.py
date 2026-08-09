@@ -264,11 +264,12 @@ class FrameProcessor:
     self.lock = threading.Lock()
     self.distance_cm = 40.0
     self.sharpen_amount = 1.2
-    self.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
-        max_num_faces=1,
-        refine_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
+   self.mp_face_mesh = mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=True,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
     )
 
   def apply_unsharp_mask(self, image, alpha):
