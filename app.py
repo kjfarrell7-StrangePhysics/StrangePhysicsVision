@@ -5,6 +5,7 @@ import av
 import bs4
 import cv2
 import mediapipe as mp
+import mediapipe.python.solutions.face_mesh as mp_face_mesh
 import numpy as np
 import pypdf
 import requests
