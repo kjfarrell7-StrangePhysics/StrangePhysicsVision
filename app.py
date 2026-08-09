@@ -1,24 +1,13 @@
 import threading
-import bs4
 import cv2
 import numpy as np
-import pypdf
-import requests
 import streamlit as st
 import av
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
-# Safely import FaceMesh across different MediaPipe release structures
-try:
-    FaceMesh = mp.solutions.face_mesh.FaceMesh
-except AttributeError:
-    try:
-        import mediapipe.python.solutions.face_mesh as mp_face_mesh
-        FaceMesh = mp_face_mesh.FaceMesh
-    except (ImportError, AttributeError):
-        from mediapipe.solutions import face_mesh
-        FaceMesh = face_mesh.FaceMesh
+# Initialize MediaPipe Face Mesh solution
+mp_face_mesh = mp.solutions.face_mesh
 
 
 class FrameProcessor(VideoProcessorBase):
@@ -26,7 +15,7 @@ class FrameProcessor(VideoProcessorBase):
         self.lock = threading.Lock()
         self.distance_cm = 40.0
         self.sharpen_amount = 1.2
-        self.mp_face_mesh = FaceMesh(
+        self.face_mesh = mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
             min_detection_confidence=0.5,
@@ -36,16 +25,16 @@ class FrameProcessor(VideoProcessorBase):
     def process_frame(self, image: np.ndarray) -> np.ndarray:
         h, w, _ = image.shape
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results = self.mp_face_mesh.process(rgb_image)
+        results = self.face_mesh.process(rgb_image)
 
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                # Draw facial mesh landmarks
+                # Draw facial mesh keypoints on frame
                 for lm in face_landmarks.landmark:
                     cx, cy = int(lm.x * w), int(lm.y * h)
                     cv2.circle(image, (cx, cy), 1, (0, 255, 0), -1)
 
-                # Estimate face distance using eye landmarks (33 and 263)
+                # Estimate distance using inter-ocular distance (landmarks 33 and 263)
                 p1 = face_landmarks.landmark[33]
                 p2 = face_landmarks.landmark[263]
                 dist_px = np.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2) * w
@@ -54,10 +43,10 @@ class FrameProcessor(VideoProcessorBase):
                     with self.lock:
                         self.distance_cm = calculated_dist
 
-        # Apply sharpening filter if adjusted above 1.0
         with self.lock:
             sharpen = self.sharpen_amount
 
+        # Apply spatial sharpening kernel if enabled
         if sharpen > 1.0:
             kernel = np.array(
                 [[0, -1, 0], [-1, 4 + sharpen, -1], [0, -1, 0]]
@@ -72,7 +61,7 @@ class FrameProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(processed_img, format="bgr24")
 
 
-# Page Layout & Configuration
+# Streamlit Page Configuration
 st.set_page_config(
     page_title="StrangePhysics Vision",
     page_icon="👁️",
@@ -81,13 +70,12 @@ st.set_page_config(
 
 st.title("StrangePhysics Vision System 👁️⚡")
 st.markdown(
-    "Real-time webcam video stream with facial landmark tracking, distance estimation, and image processing controls."
+    "Real-time webcam video stream with facial landmark tracking, distance estimation, and dynamic image processing filters."
 )
 
-# Sidebar Controls
+# Sidebar Controls & Live Telemetry
 st.sidebar.header("Vision Controls")
 
-# Session State Persistence
 if "processor" not in st.session_state:
     st.session_state.processor = FrameProcessor()
 
@@ -100,7 +88,7 @@ with processor.lock:
 st.sidebar.markdown("---")
 st.sidebar.metric("Estimated Face Distance", f"{processor.distance_cm} cm")
 
-# WebRTC Streamer Setup
+# WebRTC Connection Settings
 rtc_configuration = RTCConfiguration(
     {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
 )
