@@ -6,7 +6,6 @@ import av
 import mediapipe as mp
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, RTCConfiguration
 
-# Initialize MediaPipe Face Mesh solution
 mp_face_mesh = mp.solutions.face_mesh
 
 
@@ -15,6 +14,8 @@ class FrameProcessor(VideoProcessorBase):
         self.lock = threading.Lock()
         self.distance_cm = 40.0
         self.sharpen_amount = 1.2
+        self.zoom_factor = 1.0
+        self.high_contrast = False
         self.face_mesh = mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=True,
@@ -29,12 +30,7 @@ class FrameProcessor(VideoProcessorBase):
 
         if results.multi_face_landmarks:
             for face_landmarks in results.multi_face_landmarks:
-                # Draw facial mesh keypoints on frame
-                for lm in face_landmarks.landmark:
-                    cx, cy = int(lm.x * w), int(lm.y * h)
-                    cv2.circle(image, (cx, cy), 1, (0, 255, 0), -1)
-
-                # Estimate distance using inter-ocular distance (landmarks 33 and 263)
+                # Inter-ocular distance calculation
                 p1 = face_landmarks.landmark[33]
                 p2 = face_landmarks.landmark[263]
                 dist_px = np.sqrt((p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2) * w
@@ -45,13 +41,25 @@ class FrameProcessor(VideoProcessorBase):
 
         with self.lock:
             sharpen = self.sharpen_amount
+            zoom = self.zoom_factor
+            contrast = self.high_contrast
 
-        # Apply spatial sharpening kernel if enabled
+        # 1. Digital Zoom / Cropping
+        if zoom > 1.0:
+            crop_h, crop_w = int(h / zoom), int(w / zoom)
+            start_y, start_x = (h - crop_h) // 2, (w - crop_w) // 2
+            cropped = image[start_y:start_y + crop_h, start_x:start_x + crop_w]
+            image = cv2.resize(cropped, (w, h), interpolation=cv2.INTER_LINEAR)
+
+        # 2. Sharpening Filter
         if sharpen > 1.0:
-            kernel = np.array(
-                [[0, -1, 0], [-1, 4 + sharpen, -1], [0, -1, 0]]
-            )
+            kernel = np.array([[0, -1, 0], [-1, 4 + sharpen, -1], [0, -1, 0]])
             image = cv2.filter2D(image, -1, kernel)
+
+        # 3. High Contrast Mode
+        if contrast:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            image = cv2.cvtColor(cv2.equalizeHist(gray), cv2.COLOR_GRAY2BGR)
 
         return image
 
@@ -61,42 +69,73 @@ class FrameProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(processed_img, format="bgr24")
 
 
-# Streamlit Page Configuration
-st.set_page_config(
-    page_title="StrangePhysics Vision",
-    page_icon="👁️",
-    layout="wide",
-)
+# Page Setup
+st.set_page_config(page_title="Adaptive Vision Reader", page_icon="👁️", layout="wide")
 
-st.title("StrangePhysics Vision System 👁️⚡")
-st.markdown(
-    "Real-time webcam video stream with facial landmark tracking, distance estimation, and dynamic image processing filters."
-)
+st.title("Adaptive Vision Reader 👁️📖")
+st.markdown("Dynamic screen scaling & distance-based auto-magnification.")
 
-# Sidebar Controls & Live Telemetry
-st.sidebar.header("Vision Controls")
+# Sidebar Adjustments
+st.sidebar.header("Vision & Magnification Settings")
 
 if "processor" not in st.session_state:
     st.session_state.processor = FrameProcessor()
 
 processor = st.session_state.processor
 
-sharpen_val = st.sidebar.slider("Sharpen Amount", 1.0, 5.0, 1.2, 0.1)
+sharpen_val = st.sidebar.slider("Sharpening", 1.0, 5.0, 1.5, 0.1)
+zoom_val = st.sidebar.slider("Camera Digital Zoom", 1.0, 3.0, 1.2, 0.1)
+high_contrast_val = st.sidebar.checkbox("High Contrast Mode", False)
+
 with processor.lock:
     processor.sharpen_amount = sharpen_val
+    processor.zoom_factor = zoom_val
+    processor.high_contrast = high_contrast_val
 
+current_dist = processor.distance_cm
 st.sidebar.markdown("---")
-st.sidebar.metric("Estimated Face Distance", f"{processor.distance_cm} cm")
+st.sidebar.metric("Eye-to-Screen Distance", f"{current_dist} cm")
 
-# WebRTC Connection Settings
-rtc_configuration = RTCConfiguration(
-    {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
-)
+# Adaptive Font Sizing Logic
+# Calculates dynamic font size: farther distance = larger text size
+calculated_font_size = max(18, int((current_dist / 30.0) * 24))
 
-st.subheader("Live Feed")
-webrtc_streamer(
-    key="strangephysics-vision",
-    video_processor_factory=lambda: processor,
-    rtc_configuration=rtc_configuration,
-    media_stream_constraints={"video": True, "audio": False},
-)
+# UI Tabs: Reader Mode vs Video Feed
+tab1, tab2 = st.tabs(["📖 Reading Canvas", "📷 Live Camera Stream"])
+
+with tab1:
+    st.markdown(f"### Adaptive Reader Output (Font Size: {calculated_font_size}px)")
+    
+    user_text = st.text_area(
+        "Paste or type text to magnify:",
+        value="Optics and wave mechanics demonstrate how spatial frequencies change with distance. Moving the display to arm's length reduces perceived retinal angle, requiring dynamic scaling for sharp focus without auxiliary lenses.",
+        height=100,
+    )
+    
+    # Styled output container with dynamically injected font-size
+    st.markdown(
+        f"""
+        <div style="
+            font-size: {calculated_font_size}px; 
+            line-height: 1.6; 
+            padding: 20px; 
+            background-color: #1e1e1e; 
+            color: #ffffff; 
+            border-radius: 10px; 
+            border: 2px solid #4CAF50;">
+            {user_text}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+with tab2:
+    rtc_configuration = RTCConfiguration(
+        {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    )
+    webrtc_streamer(
+        key="strangephysics-vision",
+        video_processor_factory=lambda: processor,
+        rtc_configuration=rtc_configuration,
+        media_stream_constraints={"video": True, "audio": False},
+    )
